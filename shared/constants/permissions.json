@@ -1,0 +1,44 @@
+{
+  "tasks": ["owner", "warehouse", "packer", "agent", "accountant", "bot"],
+  "actions": {
+    "user.manage":                      ["owner"],
+    "reference.upsert":                 ["owner"],
+    "policy.update":                    ["owner"],
+    "price.set":                        ["owner"],
+    "approval.grant":                   ["owner"],
+    "inbox.resolve":                    ["owner"],
+
+    "purchase.raw":                     ["owner", "warehouse"],
+    "purchase.packaging":               ["owner", "warehouse"],
+    "supplier.pay":                     ["owner", "accountant"],
+
+    "packaging.post":                   ["owner", "packer"],
+
+    "transfer.prepare.loading":         ["owner", "warehouse"],
+    "transfer.prepare.custody_return":  ["owner", "agent"],
+    "transfer.accept.loading":          ["owner", "warehouse", "packer", "agent", "accountant"],
+    "transfer.accept.custody_return":   ["owner", "warehouse"],
+    "transfer.accept.cash_handover":    ["owner", "accountant"],
+
+    "sale.create":                      ["owner", "agent"],
+    "payment.receive":                  ["owner", "agent"],
+    "term.extend":                      ["owner"],
+
+    "return.declare":                   ["owner", "agent"],
+    "return.accept":                    ["owner", "warehouse"],
+    "return.settle":                    ["owner"],
+    "exchange.approve":                 ["owner"],
+    "writeoff.approve":                 ["owner"],
+
+    "dispute.open":                     ["owner", "bot"],
+    "dispute.resolve":                  ["owner"],
+
+    "expense.record":                   ["owner", "warehouse", "accountant", "agent"],
+    "bank.match":                       ["owner", "accountant"],
+
+    "stock_count.submit":               ["owner", "warehouse"],
+    "stock_count.approve":              ["owner"],
+
+    "closing.submit":                   ["agent"]
+  }
+}

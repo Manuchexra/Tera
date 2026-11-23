@@ -1,0 +1,15 @@
+{
+  "credit_limit": 2000000,
+  "payment_term_days": 14,
+  "day_close_deadline": "21:00",
+  "dispute_working_days": 2,
+  "return_alert_pct": 50,
+  "shrink_deviation_pct": 50,
+  "shrink_min_batches": 8,
+  "shrink_min_input_g": 50000,
+  "stale_after_minutes": 120,
+  "risky_debt_age_days": 31,
+  "clock_ok_seconds": 300,
+  "clock_max_seconds": 86400,
+  "default_shelf_life_days": 180
+}

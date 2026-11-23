@@ -1,0 +1,127 @@
+# Ishlab chiqish va testlar uchun PostgreSQL va Redis.
+#
+#   Ishga tushirish:        docker compose -f infrastructure/docker/docker-compose.yml up -d postgres redis
+#   Testlar (ikkala bazada): docker compose -f infrastructure/docker/docker-compose.yml --profile test run --rm tests
+#   To'xtatish:             docker compose -f infrastructure/docker/docker-compose.yml down        (-v: ma'lumotlar bilan)
+#
+# Testlar `tera_test` bazasini tozalaydi. `tera` bazasiga tegmaydi.
+name: tera
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: tera
+      POSTGRES_PASSWORD: tera
+      POSTGRES_DB: tera
+    ports:
+      - "5433:5432"            # lokal PostgreSQL bilan to'qnashmasligi uchun 5433
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-test-db.sql:/docker-entrypoint-initdb.d/10-test-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tera"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    command: ["uvicorn", "backend.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
+      TERA_REDIS_URL: redis://redis:6379/0
+      TERA_SECRET: ${TERA_SECRET}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  outbox-relay:
+    profiles: ["notifications"]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    command: ["python", "-m", "backend.jobs.relay_worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
+      TERA_REDIS_URL: redis://redis:6379/0
+    restart: unless-stopped
+
+  telegram-bot:
+    profiles: ["notifications"]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    command: ["python", "-m", "telegram_bot.worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
+      TERA_REDIS_URL: redis://redis:6379/0
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID}
+    restart: unless-stopped
+
+  nightly:
+    profiles: ["jobs"]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    command: ["python", "-m", "backend.jobs.nightly"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/backend.Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TERA_TEST_DB: postgresql://tera:tera@postgres:5432/tera_test
+      TERA_TEST_REDIS: redis://redis:6379/15
+    command: ["python", "-m", "unittest", "discover", "-s", "backend/tests", "-t", "."]
+
+volumes:
+  pgdata:
+  redisdata:

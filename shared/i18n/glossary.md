@@ -1,0 +1,1 @@
+# Terminlar lug'ati
