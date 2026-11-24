@@ -4,4 +4,4 @@ psycopg[binary,pool]>=3.1
 redis>=5.0
 fastapi>=0.110          # 10-bosqichda ishlatiladi
 uvicorn[standard]>=0.29 # 10-bosqichda ishlatiladi
-httpx>=0.27              # FastAPI TestClient uchun
+httpx2>=2.0              # FastAPI TestClient uchun

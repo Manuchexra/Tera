@@ -100,8 +100,10 @@ Telegram egasiga xabar yetkazish uchun `.env` dagi bot tokeni va egasining chat 
 
     docker compose --env-file infrastructure/env/.env -f infrastructure/docker/docker-compose.yml --profile notifications up -d outbox-relay telegram-bot
 
-Relay va bot alohida jarayonlar. Xabarlar avval PostgreSQL outbox'iga saqlanadi, Redis oqim orqali tez uzatadi;
-yetkazish kamida bir marta bo'lgani sababli, Telegram yoki DB uzilishidan so'ng xabar takror kelishi mumkin.
+Relay va bot alohida jarayonlar. `/start` faqat sozlangan egasining chatida tasdiq xabarini qaytaradi;
+boshqa Telegram buyruqlari hozircha qo'llanmaydi. Xabarlar avval PostgreSQL outbox'iga saqlanadi, Redis
+oqim orqali tez uzatadi; yetkazish kamida bir marta bo'lgani sababli, Telegram yoki DB uzilishidan so'ng
+xabar takror kelishi mumkin.
 
 Tungi tekshiruvni tashqi cron yoki Windows Task Scheduler'dan har kuni ishga tushiring:
 

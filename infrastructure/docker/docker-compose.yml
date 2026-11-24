@@ -51,7 +51,7 @@ services:
     environment:
       TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
       TERA_REDIS_URL: redis://redis:6379/0
-      TERA_SECRET: ${TERA_SECRET}
+      TERA_SECRET: ${TERA_SECRET:-}
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -91,8 +91,8 @@ services:
     environment:
       TERA_DATABASE_URL: postgresql://tera:tera@postgres:5432/tera
       TERA_REDIS_URL: redis://redis:6379/0
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_OWNER_CHAT_ID: ${TELEGRAM_OWNER_CHAT_ID:-}
     restart: unless-stopped
 
   nightly:

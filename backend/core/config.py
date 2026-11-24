@@ -17,6 +17,7 @@ class Settings:
     token_ttl_seconds: int = 12 * 3600
     pool_min: int = 1
     pool_max: int = 10
+    allowed_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, env=None) -> "Settings":
@@ -49,9 +50,13 @@ class Settings:
         pool_max = integer("TERA_DB_POOL_MAX", 10, 1, 500)
         if pool_max < pool_min:
             raise ConfigError("TERA_DB_POOL_MAX TERA_DB_POOL_MIN dan kichik bo'lmasligi kerak")
+        origins_raw = (env.get("TERA_ALLOWED_ORIGINS") or "").strip()
+        allowed_origins = tuple(origin.strip().rstrip("/") for origin in origins_raw.split(",") if origin.strip())
+        if not all(origin.startswith(("http://", "https://")) for origin in allowed_origins):
+            raise ConfigError("TERA_ALLOWED_ORIGINS faqat http:// yoki https:// manzillaridan iborat bo'lishi kerak")
         return cls(database_url=db, secret=secret, redis_url=redis_url,
                    token_ttl_seconds=integer("TERA_TOKEN_TTL_SECONDS", 12 * 3600, 60, 30 * 24 * 3600),
-                   pool_min=pool_min, pool_max=pool_max)
+                   pool_min=pool_min, pool_max=pool_max, allowed_origins=allowed_origins)
 
     @property
     def is_production_db(self) -> bool:

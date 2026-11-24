@@ -204,18 +204,22 @@ class RedisFailureTests(unittest.TestCase):
 
     def test_fail_open_for_cache_and_rate_limit_fail_closed_for_lock(self):
         self.fake.fail = True
-        self.assertIsNone(self.b.get("k"))                           # kesh: "topilmadi"
-        self.b.set("k", "v", 10)                                     # xato ko'tarilmaydi
-        self.b.delete("k")
-        d = self.b.hit("login:u", 1, 60)
-        self.assertTrue(d.allowed)                                   # tezlik cheklovi: ruxsat (bazadagi bloklash himoya qiladi)
-        with self.assertRaises(LockUnavailable):
-            self.b.acquire("nightly", 60)                            # qulf: berilmaydi
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            self.assertIsNone(self.b.get("k"))                       # kesh: "topilmadi"
+            self.b.set("k", "v", 10)                                 # xato ko'tarilmaydi
+            self.b.delete("k")
+            d = self.b.hit("login:u", 1, 60)
+            self.assertTrue(d.allowed)                               # bazadagi bloklash himoya qiladi
+            with self.assertRaises(LockUnavailable):
+                self.b.acquire("nightly", 60)                        # qulf: berilmaydi
+        self.assertIn("Redis ishlamayapti (get)", captured.output[0])
         self.assertFalse(self.b.healthy)
 
     def test_recovers_when_redis_returns(self):
         self.fake.fail = True
-        self.b.get("k")
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            self.b.get("k")
+        self.assertIn("Redis ishlamayapti (get)", captured.output[0])
         self.assertFalse(self.b.healthy)
         self.fake.fail = False
         self.b.set("k", "v", 10)
@@ -223,8 +227,10 @@ class RedisFailureTests(unittest.TestCase):
         self.assertEqual(self.b.get("k"), "v")
 
     def test_factory(self):
-        self.assertIsInstance(make_backend(None), MemoryBackend)
-        self.assertIsInstance(make_backend(""), MemoryBackend)
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            self.assertIsInstance(make_backend(None), MemoryBackend)
+            self.assertIsInstance(make_backend(""), MemoryBackend)
+        self.assertEqual(len(captured.output), 2)
 
 
 class RelayTests(AppCase):
@@ -267,7 +273,9 @@ class RelayTests(AppCase):
             return real(stream, fields, maxlen)
 
         with mock.patch.object(self.backend, "publish", flaky):
-            self.assertEqual(self.relayed(), 2)
+            with self.assertLogs("tera.relay", level="WARNING") as captured:
+                self.assertEqual(self.relayed(), 2)
+        self.assertIn("redis tushib qoldi", captured.output[0])
         self.assertEqual(len(self.ob.unrelayed("telegram_store")), 3)
         self.assertEqual(self.relayed(), 3)                          # tiklangach qolganlari uzatiladi
         msgs = relay.read_messages(self.backend, "telegram_store", "bot", "c", 10)
@@ -330,7 +338,9 @@ class SnapshotCacheTests(AppCase):
         fake = FakeRedis(Clock())
         fake.fail = True
         down = RedisBackend(fake, errors=(FakeRedisError,))
-        data = queries.cached_snapshot(down, self.j, self.e.current_policy())
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            data = queries.cached_snapshot(down, self.j, self.e.current_policy())
+        self.assertIn("Redis ishlamayapti (get)", captured.output[0])
         self.assertEqual(data["products"][0]["price"], 8_000)
 
     def test_cache_and_rebuild_stay_consistent(self):
@@ -374,18 +384,23 @@ class LoginRateLimitTests(AppCase):
         fake.fail = True
         auth = AuthService(self.j, self.env.auth.tokens, self.env.perms,
                            limiter=RedisBackend(fake, errors=(FakeRedisError,)))
-        self.assertEqual(auth.login("jasur", "password123", "dev-jasur", client_key="x").user.login, "jasur")
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            result = auth.login("jasur", "password123", "dev-jasur", client_key="x")
+        self.assertIn("Redis ishlamayapti (hit)", captured.output[0])
+        self.assertEqual(result.user.login, "jasur")
 
     def test_database_lockout_still_protects_when_redis_is_down(self):
         fake = FakeRedis(Clock())
         fake.fail = True
         auth = AuthService(self.j, self.env.auth.tokens, self.env.perms,
                            limiter=RedisBackend(fake, errors=(FakeRedisError,)))
-        for _ in range(5):
-            with self.assertRaises(DomainError):
-                auth.login("jasur", "wrong-password", "dev-jasur", client_key="x")
-        with self.assertRaises(DomainError) as cm:
-            auth.login("jasur", "password123", "dev-jasur", client_key="x")
+        with self.assertLogs("tera.cache", level="WARNING") as captured:
+            for _ in range(5):
+                with self.assertRaises(DomainError):
+                    auth.login("jasur", "wrong-password", "dev-jasur", client_key="x")
+            with self.assertRaises(DomainError) as cm:
+                auth.login("jasur", "password123", "dev-jasur", client_key="x")
+        self.assertIn("Redis ishlamayapti (hit)", captured.output[0])
         self.assertEqual(cm.exception.code, "account_locked")
 
 

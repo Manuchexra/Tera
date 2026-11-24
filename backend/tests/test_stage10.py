@@ -1,3 +1,5 @@
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,12 +24,118 @@ from backend.api.main import create_app
 from telegram_bot.worker import (
     TelegramDeliveryError,
     format_notification,
+    fetch_updates,
+    handle_updates,
     process_owner_messages,
     send_message,
 )
 
 
 class Stage10ApiTests(unittest.TestCase):
+    def test_figma_api_routes_are_registered(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "figma-api.sqlite3").as_posix()
+            provider = DatabaseProvider(f"sqlite:///{path}")
+            settings = Settings(f"sqlite:///{path}", SECRET)
+            try:
+                with TestClient(create_app(settings, provider)) as client:
+                    schema = client.get("/openapi.json").json()["paths"]
+                    expected = [
+                        "/api/references/{kind}",
+                        "/api/references/{kind}/{reference_id}",
+                        "/api/sales",
+                        "/api/sales/{sale_id}",
+                        "/api/purchases",
+                        "/api/purchases/{purchase_id}",
+                        "/api/batches",
+                        "/api/batches/{batch_id}",
+                        "/api/warehouse/loadings",
+                        "/api/warehouse/stock-counts",
+                        "/api/returns",
+                        "/api/disputes",
+                        "/api/closings",
+                        "/api/inbox",
+                        "/api/inbox/{event_id}/resolve",
+                        "/api/payments",
+                        "/api/payments/{payment_id}",
+                        "/api/disputes/{dispute_id}",
+                        "/api/suppliers/{supplier_id}/payments",
+                        "/api/prices/{product_id}/history",
+                        "/api/batches/{batch_id}/shrink",
+                        "/api/warehouse/custody",
+                        "/api/returns/{return_id}",
+                        "/api/exchanges/{exchange_id}",
+                        "/api/writeoffs",
+                        "/api/closings/{closing_id}",
+                        "/api/cash-handovers",
+                        "/api/cash-handovers/{transfer_id}",
+                        "/api/closings/{agent_id}/balance-preview",
+                        "/api/policy",
+                        "/api/auth/devices",
+                        "/api/events",
+                        "/api/events/{event_id}",
+                    ]
+                    missing = [route for route in expected if route not in schema]
+                    self.assertEqual(missing, [], missing)
+            finally:
+                provider.close()
+
+    def test_owner_user_management_and_cors(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "auth-api.sqlite3").as_posix()
+            provider = DatabaseProvider(f"sqlite:///{path}")
+            settings = Settings(
+                f"sqlite:///{path}",
+                SECRET,
+                allowed_origins=("http://localhost:5173",),
+            )
+            try:
+                with TestClient(create_app(settings, provider)) as client:
+                    bootstrap = client.post("/api/auth/bootstrap", json={
+                        "login": "owner",
+                        "password": "password123",
+                        "full_name": "Tizim egasi",
+                    })
+                    self.assertEqual(bootstrap.status_code, 200, bootstrap.text)
+
+                    login = client.post("/api/auth/login", json={
+                        "login": "owner",
+                        "password": "password123",
+                        "device_id": "owner-device",
+                    })
+                    self.assertEqual(login.status_code, 200, login.text)
+                    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+                    created = client.post("/api/auth/users", headers=headers, json={
+                        "login": "agent1",
+                        "password": "password123",
+                        "full_name": "Agent bir",
+                        "tasks": ["agent"],
+                    })
+                    self.assertEqual(created.status_code, 200, created.text)
+                    user_id = created.json()["user_id"]
+
+                    listed = client.get("/api/auth/users", headers=headers)
+                    self.assertEqual(listed.status_code, 200, listed.text)
+                    self.assertEqual(len(listed.json()["users"]), 2)
+
+                    changed = client.patch(
+                        f"/api/auth/users/{user_id}/active",
+                        headers=headers,
+                        json={"active": False},
+                    )
+                    self.assertEqual(changed.status_code, 200, changed.text)
+                    self.assertFalse(changed.json()["active"])
+
+                    cors = client.get(
+                        "/health",
+                        headers={"Origin": "http://localhost:5173"},
+                    )
+                    self.assertEqual(cors.headers["access-control-allow-origin"],
+                                     "http://localhost:5173")
+            finally:
+                provider.close()
+
     def test_owner_can_login_and_read_reports(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory, "api.sqlite3").as_posix()
@@ -126,6 +234,24 @@ class Stage10JobTests(AppCase):
 
 
 class Stage10TelegramTests(AppCase):
+    def test_start_command_gets_a_reply_only_in_owner_chat(self):
+        updates = [
+            {"update_id": 21, "message": {"chat": {"id": 123}, "text": "/start"}},
+            {"update_id": 22, "message": {"chat": {"id": 456}, "text": "/start"}},
+            {"update_id": 23, "message": {"chat": {"id": 123}, "text": "/help"}},
+        ]
+        with self.assertLogs("tera.telegram", level="INFO") as captured:
+            with patch("telegram_bot.worker.send_message") as send:
+                offset = handle_updates(updates, "bot-token", "123", offset=20)
+
+        self.assertEqual(offset, 24)
+        send.assert_called_once_with(
+            "bot-token", "123",
+            "Tera xabarnoma boti tayyor. Bildirishnomalar shu chatga keladi.",
+        )
+        self.assertIn("chat_id=123", captured.output[0])
+        self.assertTrue(any("chat_id=456" in line for line in captured.output))
+
     def test_owner_notification_is_confirmed_after_delivery(self):
         backend = MemoryBackend()
         with self.env.db.transaction():
@@ -148,12 +274,14 @@ class Stage10TelegramTests(AppCase):
             outbox_id = self.e.outbox.add("owner", "sample_alert", None, {"note": "salom"}, T0)
         relay_outbox(self.env.db, backend, "owner", T0)
 
-        with patch("telegram_bot.worker.send_message", side_effect=TelegramDeliveryError("API down")):
-            delivered = process_owner_messages(
-                self.env.db, backend, "bot-token", "owner-chat", now=T0,
-            )
+        with self.assertLogs("tera.telegram", level="ERROR") as captured:
+            with patch("telegram_bot.worker.send_message", side_effect=TelegramDeliveryError("API down")):
+                delivered = process_owner_messages(
+                    self.env.db, backend, "bot-token", "owner-chat", now=T0,
+                )
 
         row = self.env.db.one("SELECT sent_at, attempts, last_error FROM outbox WHERE id = ?", (outbox_id,))
+        self.assertIn("API down", captured.output[0])
         self.assertEqual(delivered, 0)
         self.assertIsNone(row["sent_at"])
         self.assertEqual(row["attempts"], 1)
@@ -174,6 +302,32 @@ class Stage10TelegramTests(AppCase):
             with self.assertRaises(TelegramDeliveryError) as caught:
                 send_message(token, "owner-chat", "alert")
         self.assertNotIn(token, str(caught.exception))
+
+    def test_rate_limit_retry_after_is_honored_without_exposing_token(self):
+        token = "secret-bot-token"
+        error = urllib.error.HTTPError(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            429,
+            "Too Many Requests",
+            {},
+            io.BytesIO(b'{"description":"Too Many Requests","parameters":{"retry_after":17}}'),
+        )
+        with patch("urllib.request.urlopen", side_effect=error):
+            with self.assertRaises(TelegramDeliveryError) as caught:
+                fetch_updates(token, offset=0)
+
+        self.assertEqual(caught.exception.retry_after, 17)
+        self.assertIn("Too Many Requests", str(caught.exception))
+        self.assertNotIn(token, str(caught.exception))
+
+    def test_updates_use_long_polling_beyond_telegram_retry_window(self):
+        response = io.BytesIO(b'{"ok":true,"result":[]}')
+        with patch("urllib.request.urlopen", return_value=response) as urlopen:
+            self.assertEqual(fetch_updates("bot-token", offset=0), [])
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(json.loads(request.data)["timeout"], 50)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 65)
 
 
 if __name__ == "__main__":
